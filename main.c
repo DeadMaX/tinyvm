@@ -13,6 +13,10 @@ typedef struct
 	uint64_t regs[4];
 	size_t stackptr;
 	const char *pc;
+
+	bool equals:1;
+	bool lesser:1;
+	bool greater:1;
 } cpustate;
 
 typedef void (*op)(cpustate *);
@@ -329,6 +333,99 @@ static void divide(cpustate *state)
 	state->regs[0] = val1 / val2;
 }
 
+static void remider(cpustate *state)
+{
+    /* remider: opcode 1000
+     * layout: yyxx1000
+     * yy: regnumber (00 for memory parameter)
+     * xx: regnumber (00 for memory parameter)
+     * result in reg 00
+     */
+	uint64_t val1, val2;
+	uint8_t regnum1 = ((*state->pc) & 0x30) >> 4;
+	uint8_t regnum2 = ((*state->pc) & 0xc0) >> 6;
+
+	if (regnum1 == 0)
+	{
+		memaddr a = readmem(state);
+		val1 = vmmem[a];
+	}
+	else
+	{
+		val1 = state->regs[regnum1];
+	}
+
+	if (regnum2 == 0)
+	{
+		memaddr a = readmem(state);
+		val2 = vmmem[a];
+	}
+	else
+	{
+		val2 = state->regs[regnum2];
+	}
+
+	state->regs[0] = val1 % val2;
+}
+
+static void test(cpustate *state)
+{
+    /* test: opcode 1001
+     * layout: yyxx1000
+     */
+	uint8_t regnum1 = ((*state->pc) & 0x30) >> 4;
+	uint8_t regnum2 = ((*state->pc) & 0xc0) >> 6;
+
+	if (state->regs[regnum1] == state->regs[regnum2])
+	{
+		state->equals = true;
+		state->lesser = false;
+		state->greater = false;
+	}
+	else if (state->regs[regnum1] < state->regs[regnum2])
+	{
+		state->equals = false;
+		state->lesser = true;
+		state->greater = false;
+	}
+	else
+	{
+		state->equals = false;
+		state->lesser = false;
+		state->greater = true;
+	}
+}
+
+static void jump(cpustate *state)
+{
+    /* test: opcode 1010
+     * layout: wzyx1000
+     * x: equal
+     * y: lesser
+     * z: greater
+     * w: conditional enable
+     */
+
+    uint8_t param = (*state->pc);
+    memaddr to = readmem(state);
+
+	if (param & 0x80)
+	{
+		if (!(((param & 0x40) && state->greater)
+			 || ((param & 0x20) && state->lesser)
+			 || ((param & 0x20) && state->lesser)))
+		{
+			return;
+		}
+	}
+	state->pc = codestart + to;
+	if (state->pc < codestart || state->pc >= codeend)
+	{
+		fprintf(stderr, "Invalid jump\n");
+		exit (0);
+	}
+}
+
 static void runcode(const char *code, size_t codelen)
 {
 	static const op opcodes[] =
@@ -341,6 +438,9 @@ static void runcode(const char *code, size_t codelen)
 		sub,
 		mul,
 		divide,
+		remider,
+		test,
+		jump
 	};
 	cpustate state = {0};
 
@@ -446,7 +546,6 @@ static void vmrun(const char *data, size_t len)
 }
 
 int main() {
-/*
 	size_t len = 1024;
 	size_t off = 0;
 	char *buffer = malloc(len);
@@ -464,10 +563,4 @@ int main() {
 		}
 	}
 	vmrun(buffer, off);
-*/
-#define CODE "sleep\0\1exit\0\1\0\2\0\0\0\0\0\0\0\xff\0\0\0\0\0\0\x9\x9\x80\0\3\x10\0\x63\2\1"
-	const char *code = CODE;
-	size_t len = sizeof(CODE);
-	vmrun(code, len);
-	return 0;
 }
