@@ -1,11 +1,10 @@
 #include <stdlib.h>
-
+#include <stdio.h>
 
 void run()
 {
-	int quantedeux = 42;
-	int quanteun= 41;
-
-	exit(quantedeux);
+	puts("C'est la chenille qui redémarre :)");
+	puts("C'est la chenille qui redémarre :)");
+	puts("C'est la chenille qui redémarre :)");
+	exit(42);
 }
-

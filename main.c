@@ -7,6 +7,7 @@
 #include <stdbool.h>
 
 typedef uint8_t callnum;
+typedef uint8_t stringnum;
 typedef uint8_t memaddr;
 typedef struct
 {
@@ -28,6 +29,7 @@ static enum
     /* return_param1_param2_param3_param4 */
 	VOID_VOID = 0,
 	VOID_INT,
+	INT_POINTER,
 
 	SYMS_TYPE_MAX
 } syms_type[MAXSYMS];
@@ -37,6 +39,9 @@ static uint64_t vmmem[MAXMEM];
 
 #define VMSTACK 1024
 static uint64_t vmstack[VMSTACK];
+
+#define MAXSTR (1 << (sizeof(stringnum) * 8))
+static const char *strings[MAXSTR];
 
 static const char *codestart;
 static const char *codeend;
@@ -51,7 +56,7 @@ static void advance(cpustate *state)
 	}
 }
 
-memaddr readmem(cpustate *state)
+static memaddr readmem(cpustate *state)
 {
 	memaddr res = 0;
 	for(size_t i = 0; i < sizeof(memaddr); ++i)
@@ -63,7 +68,7 @@ memaddr readmem(cpustate *state)
 	return res;
 }
 
-callnum readfunc(cpustate *state)
+static callnum readfunc(cpustate *state)
 {
 	callnum res = 0;
 	for(size_t i = 0; i < sizeof(callnum); ++i)
@@ -75,55 +80,114 @@ callnum readfunc(cpustate *state)
 	return res;
 }
 
+static stringnum readstr(cpustate *state)
+{
+	stringnum res = 0;
+	for(size_t i = 0; i < sizeof(stringnum); ++i)
+	{
+		advance(state);
+		res <<= 8;
+		res += *(uint8_t *)state->pc;
+	}
+	return res;
+}
+
+static uint64_t readval(cpustate *state)
+{
+	uint64_t res = 0;
+	for(size_t i = 0; i < sizeof(uint64_t); ++i)
+	{
+		advance(state);
+		res <<= 8;
+		res += *(uint8_t *)state->pc;
+	}
+	return res;
+}
+
 static void load(cpustate *state)
 {
     /* load: opcode 0000
-     * layout: zyxx0000
-     * z: 0 stack source, 1 mem source
-     * y
+     * layout: yyxx0000
+     * y: source:  00 stack, 01 memory, 10 string pointer, 11 immediate
      * xx: regnumber
      */
 	uint8_t regnum = ((*state->pc) & 0x30) >> 4;
-	bool mem = ((*state->pc) & 0x80) ? true : false;
-	memaddr arg = readmem(state);
-	if (mem)
+	uint8_t source = ((*state->pc) & 0xc0) >> 6;
+	switch (source)
 	{
-		state->regs[regnum] = vmmem[arg];
-	}
-	else
-	{
-		if (arg >= state->stackptr)
-		{
-			fprintf(stderr, "Stack not init\n");
-			exit(0);
-		}
-		state->regs[regnum] = vmstack[arg - state->stackptr - 1];
+		case 0:
+			{
+				memaddr arg = readmem(state);
+				if (arg >= state->stackptr)
+				{
+					fprintf(stderr, "Stack not init\n");
+					exit(0);
+				}
+				state->regs[regnum] = vmstack[arg - state->stackptr - 1];
+			}
+			break;
+
+		case 1:
+			{
+				memaddr arg = readmem(state);
+				state->regs[regnum] = vmmem[arg];
+			}
+			break;
+
+		case 2:
+			{
+				stringnum arg = readstr(state);
+				state->regs[regnum] = (uintptr_t)(strings[arg]);
+			}
+			break;
+
+		case 3:
+			{
+				state->regs[regnum] = readval(state);
+			}
+			break;
+
+		default:
+			fprintf(stderr, "Invalid state\n");
+			exit (0);
+			break;
 	}
 }
 
 static void store(cpustate *state)
 {
     /* store: opcode 0001
-     * layout: zyxx0000
-     * z: 0 stack destination, 1 mem destination
-     * y
+     * layout: yyxx0000
+     * yy: 00 stack destination, 01 mem destination
      * xx: regnumber
      */
 	uint8_t regnum = ((*state->pc) & 0x30) >> 4;
-	bool mem = ((*state->pc) & 0x80) ? true : false;
-	memaddr arg = readmem(state);
-	if (mem)
+	uint8_t mem = ((*state->pc) & 0xc0) >> 6;
+	switch(mem)
 	{
-		vmmem[arg] = state->regs[regnum];
-	}
-	else
-	{
-		if (arg >= state->stackptr)
-		{
-			fprintf(stderr, "Stack fault\n");
-			exit(0);
-		}
-		vmstack[arg - state->stackptr - 1] = state->regs[regnum] ;
+		case 0:
+			{
+				memaddr arg = readmem(state);
+				vmmem[arg] = state->regs[regnum];
+			}
+			break;
+
+		case 1:
+			{
+				memaddr arg = readmem(state);
+				if (arg >= state->stackptr)
+				{
+					fprintf(stderr, "Stack fault\n");
+					exit(0);
+				}
+				vmstack[arg - state->stackptr - 1] = state->regs[regnum] ;
+			}
+			break;
+
+			default:
+				fprintf(stderr, "Invalid store\n");
+				exit(0);
+				break;
 	}
 }
 
@@ -149,6 +213,9 @@ static void call(cpustate *state)
 			break;
 		case VOID_INT:
 			((void (*)(int))syms[func])(state->regs[0]);
+			break;
+		case INT_POINTER:
+			state->regs[0] = ((int (*)(void *))syms[func])((void *)state->regs[0]);
 			break;
 
 		default:
@@ -426,6 +493,28 @@ static void jump(cpustate *state)
 	}
 }
 
+static void inc_dec(cpustate *state)
+{
+    /* inc_dec: opcode 1011
+     * layout: zyxx1011
+     * x: register
+	 * y
+     * z: 0 increase, 1 decrease
+     */
+
+    bool dec = ((*state->pc) & 0x80) ? true : false;
+	uint8_t regnum = ((*state->pc) & 0x30) >> 4;
+
+	if (dec)
+	{
+		state->regs[regnum]--;
+	}
+	else
+	{
+		state->regs[regnum]++;
+	}
+}
+
 static void runcode(const char *code, size_t codelen)
 {
 	static const op opcodes[] =
@@ -440,7 +529,8 @@ static void runcode(const char *code, size_t codelen)
 		divide,
 		remider,
 		test,
-		jump
+		jump,
+		inc_dec
 	};
 	cpustate state = {0};
 
@@ -507,6 +597,34 @@ static void readsyms(const char **_data, size_t *_len)
 	*_data = data;
 }
 
+static void readstrings(const char **_data, size_t *_len)
+{
+	const char *data = *_data;
+	size_t len = *_len;
+	size_t i = 0;
+	for (const char *next = memchr(data, '\0', len); next && i < MAXSTR;
+		next = memchr(data, '\0', len), ++i)
+	{
+		if (!*data)
+			break;
+
+		strings[i] = data;
+
+		len -= next + 1 - data;
+		data = next + 1;
+		if (!*data)
+			break;
+	}
+	if (*data || i >= MAXSTR)
+	{
+		fprintf(stderr, "Invalid strtab\n");
+		exit(0);
+	}
+	++data;
+	*_len -= 1;
+	*_data = data;
+}
+
 static void readvars(const char **_data, size_t *_len)
 {
 	const char *data = *_data;
@@ -541,11 +659,14 @@ static void readvars(const char **_data, size_t *_len)
 static void vmrun(const char *data, size_t len)
 {
 	readsyms(&data, &len);
+	readstrings(&data, &len);
 	readvars(&data, &len);
 	runcode(data, len);
 }
 
-int main() {
+int main()
+{
+#if 1
 	size_t len = 1024;
 	size_t off = 0;
 	char *buffer = malloc(len);
@@ -563,4 +684,8 @@ int main() {
 		}
 	}
 	vmrun(buffer, off);
+#else
+#define DATA "\x65\x78\x69\x74\x00\x01\x00\x00\x00\xc0\x00\x00\x00\x00\x00\x00\x00\xff\x02\x00"
+	vmrun(DATA, sizeof(DATA));
+#endif
 }
