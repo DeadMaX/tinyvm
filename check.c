@@ -3,8 +3,12 @@
 
 void run()
 {
-	puts("C'est la chenille qui redémarre :)");
-	puts("C'est la chenille qui redémarre :)");
-	puts("C'est la chenille qui redémarre :)");
-	exit(42);
+	int a = 6;
+	char *msg = "C'est la chenille qui redémarre :)";
+
+	a *= 7;
+	puts(msg);
+	puts(msg);
+	puts(msg);
+	exit(a);
 }

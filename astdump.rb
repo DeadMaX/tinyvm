@@ -26,9 +26,21 @@ end
 require 'fileutils'
 require 'pp'
 
+$current_sym = 0
+$symtab = {}
 
-cursor_kind_str = {}
-Clangc::CursorKind.constants.each{|c| cursor_kind_str[eval("Clangc::CursorKind::" + c.to_s)] = c.to_s} #beurk
+$current_str = 0
+$strtab = {}
+
+$current_var = 0
+$vartab = {}
+
+$cursor_kind_str = {}
+Clangc::CursorKind.constants.each{|c| $cursor_kind_str[eval("Clangc::CursorKind::" + c.to_s)] = c.to_s} #beurk
+
+$type_kind_str = {}
+Clangc::TypeKind.constants.each{|c| $type_kind_str[eval("Clangc::TypeKind::" + c.to_s)] = c.to_s} #beurk
+
 
 PATH = File.expand_path(File.dirname(__FILE__))
 
@@ -78,7 +90,7 @@ class SourceParser
 	# for the standards libs can be found
 	def build_default_include_libs
 		header_paths = []
-		gcc_lib_base='/usr/lib/gcc/' << `llvm-config37 --host-target`.chomp << "/*"
+		gcc_lib_base='/usr/lib/gcc/' << `llvm-config40 --host-target`.chomp << "/*"
 		last_gcc_lib_base = Dir.glob(gcc_lib_base ).sort.last
 		if last_gcc_lib_base
 			gcc_lib = last_gcc_lib_base + "/include"
@@ -125,7 +137,7 @@ def getcall(val1, val2)
 	when Clangc::TypeKind::INT
 		key += "-4"
 	else
-		raise "Unknown return type"
+		raise "Unknown return type " + $type_kind_str[val1]
 	end
 
 	val2.each do |arg|
@@ -135,7 +147,7 @@ def getcall(val1, val2)
 		when Clangc::TypeKind::POINTER
 			key += "P"
 		else
-			raise "Unknown parameter type \"" + arg.type.spelling + "\""
+			raise "Unknown parameter type \"" + $type_kind_str[arg.type.kind] + "\""
 		end
 	end
 
@@ -146,91 +158,157 @@ def getcall(val1, val2)
 	return hash[key]
 end
 
-current_sym = 0
-symtab = {}
+def parse_var(cursor, parent, is_new)
+	@prev ||= nil
+	@root ||= nil
 
-current_str = 0
-strtab = {}
+	if is_new
+		if ($vartab[cursor.spelling])
+			raise "Double var definition"
+		end
 
-current_var = 0
-vartab = {}
+		case cursor.type.kind
+		when Clangc::TypeKind::INT
+			$vartab[cursor.spelling] = 0
+		when Clangc::TypeKind::POINTER
+		else
+			raise "unknown type " + $type_kind_str[cursor.type.kind]
+		end
+		@root = cursor
+		@prev = cursor
+		return false
+	end
 
-tree_depth = {}
-prev_depth = 0
-prev_parent = nil
+	if parent.location.to_s != @prev.location.to_s
+		return true
+	end
+	@prev = cursor
+
+	case cursor.kind
+ 	when Clangc::CursorKind::UNEXPOSED_EXPR
+ 		return false
+	when Clangc::CursorKind::STRING_LITERAL
+		$vartab.delete(@root.spelling)
+		if (! $strtab[cursor.data])
+			$strtab[cursor.data] = $current_str
+			$current_str += 1
+		end
+	when Clangc::CursorKind::INTEGER_LITERAL
+		$vartab[@root.spelling] = cursor.data
+		$current_var += 1
+	else
+		raise "Unknown variable type " + $cursor_kind_str[cursor.kind]
+	end
+
+	return false
+end
+
+
+first_pass = 0
 cl35.parse do |tu, cursor, parent|
-	if cl35.cursor_in_main_file?(cursor)
-		if parent.location.file_location[3] != prev_parent
-			prev_depth = tree_depth[parent.location.file_location[3]] ||= (prev_depth += 1)
-		end
-		prev_parent = parent.location.file_location[3]
+	next if ! cl35.cursor_in_main_file?(cursor)
 
-		if cursor.kind == Clangc::CursorKind::STRING_LITERAL
-			val = eval(cursor.spelling)
-			if (! symtab[val])
-				strtab[val] = current_str
-				current_str += 1
-			end
-		end
+	loop = true
+	while loop
+		case first_pass
+		when 0
+			if (cursor.kind == Clangc::CursorKind::CALL_EXPR)
+				if (cursor.num_arguments > 4)
+					raise "too many argument"
+				end
 
-		if cursor.kind == Clangc::CursorKind::INTEGER_LITERAL
-		end
-
-		if (cursor.kind == Clangc::CursorKind::CALL_EXPR)
-			if (cursor.num_arguments > 4)
-				raise "too many argument"
+				if (! $symtab[cursor.spelling])
+					$symtab[cursor.spelling] = [$current_sym, getcall(cursor.type.kind, cursor.arguments)]
+					$current_sym += 1
+				end
 			end
-
-			if (! symtab[cursor.spelling])
-				symtab[cursor.spelling] = [current_sym, getcall(cursor.type.kind, cursor.arguments)]
-				current_sym += 1
+			if cursor.kind == Clangc::CursorKind::VAR_DECL
+				parse_var(cursor, parent, true)
+				first_pass = 1
 			end
-		end
-		if cursor.kind == Clangc::CursorKind::VAR_DECL
-			if (! vartab[cursor.spelling])
-				vartab[cursor.spelling] = current_var
-				current_var += 1
+		when 1
+			loop = parse_var(cursor, parent, false)
+			if (loop)
+				first_pass = 0
+				next
 			end
+		else
+			raise "Invalid state"
 		end
+		loop = false
 	end
 end
 
-if symtab.length > 256
+if $symtab.length > 256
 	raise "too many function call"
 end
 
-if strtab.length > 256
+if $strtab.length > 256
 	raise "too many strings"
 end
 
-if vartab.length > 256
+if $vartab.length > 256
 	raise "too many variables"
 end
 
-symtab.each do |sym, val|
+$symtab.each do |sym, val|
 	print sym + "\0" + [val[1]].pack("C")
 end
 print "\0"
 
-strtab.each_key do |str|
+$strtab.each_key do |str|
 	print str + "\0"
 end
 print "\0"
 
-print [vartab.length].pack("C")
-vartab.each_value do |var|
+print [$vartab.length].pack("C")
+$vartab.each_value do |var|
 	print [var].pack("Q>")
 end
 
+
+module State
+  OUT = 0
+  FUNC_DECL = 1
+  FUNC_BODY = 2
+end
+machine_status = State::OUT
+function_start = nil
+
 cl35.parse do |tu, cursor, parent|
-	if cl35.cursor_in_main_file?(cursor)
-		if parent.location.file_location[3] != prev_parent
-			prev_depth = tree_depth[parent.location.file_location[3]] ||= (prev_depth += 1)
+	next if ! cl35.cursor_in_main_file?(cursor)
+
+	loop = true
+	while loop
+		case machine_status
+		when State::OUT
+			if cursor.kind == Clangc::CursorKind::FUNCTION_DECL and cursor.spelling == "run"
+				machine_status = State::FUNC_DECL
+			end
+			loop = false
+		when State::FUNC_DECL
+			if cursor.kind != Clangc::CursorKind::COMPOUND_STMT
+				raise "No function body"
+			end
+			machine_status = State::FUNC_BODY
+			function_start = cursor
+			loop = false
+		when State::FUNC_BODY
+			if parent.location.to_s != function_start.location.to_s
+			    loop = false
+			else
+				case cursor.kind
+				when Clangc::CursorKind::DECL_STMT
+					loop = false
+				else
+					break
+					raise "Unknown cursor " + $cursor_kind_str[cursor.kind] + " " + $cursor_kind_str[parent.kind]
+				end
+			end
+		else
+			raise "Invalid state"
 		end
-		prev_parent = parent.location.file_location[3]
-
-
 	end
 end
 
-print "\x80\0\2\0\xc0\0\0\0\0\0\0\0\xff\2\1"
+print "\x80\0\2\0\x40\0\2\1"
