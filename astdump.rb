@@ -41,6 +41,7 @@ Clangc::CursorKind.constants.each{|c| $cursor_kind_str[eval("Clangc::CursorKind:
 $type_kind_str = {}
 Clangc::TypeKind.constants.each{|c| $type_kind_str[eval("Clangc::TypeKind::" + c.to_s)] = c.to_s} #beurk
 
+$function_start = nil
 
 PATH = File.expand_path(File.dirname(__FILE__))
 
@@ -266,14 +267,27 @@ $vartab.each_value do |var|
 	print [var].pack("Q>")
 end
 
+def compute_and_assign(cursor, parent, is_new)
+	@prev ||= nil
+	@root ||= nil
+
+	if is_new
+		STDERR.puts "Start assign operator >" + cursor.result_type.kind.to_s + "<"
+
+		@root = cursor
+		@prev = cursor
+		return false
+	end
+	return false
+end
 
 module State
   OUT = 0
   FUNC_DECL = 1
   FUNC_BODY = 2
+  COMPOUND_ASSIGN = 3
 end
 machine_status = State::OUT
-function_start = nil
 
 cl35.parse do |tu, cursor, parent|
 	next if ! cl35.cursor_in_main_file?(cursor)
@@ -285,29 +299,33 @@ cl35.parse do |tu, cursor, parent|
 			if cursor.kind == Clangc::CursorKind::FUNCTION_DECL and cursor.spelling == "run"
 				machine_status = State::FUNC_DECL
 			end
-			loop = false
 		when State::FUNC_DECL
 			if cursor.kind != Clangc::CursorKind::COMPOUND_STMT
 				raise "No function body"
 			end
 			machine_status = State::FUNC_BODY
-			function_start = cursor
-			loop = false
+			$function_start = cursor
 		when State::FUNC_BODY
-			if parent.location.to_s != function_start.location.to_s
-			    loop = false
-			else
+			if parent.location.to_s == $function_start.location.to_s
 				case cursor.kind
 				when Clangc::CursorKind::DECL_STMT
-					loop = false
+					# IGNORE
+				when Clangc::CursorKind::COMPOUND_ASSIGN_OPERATOR
+					compute_and_assign(cursor, parent, true)
 				else
-					break
 					raise "Unknown cursor " + $cursor_kind_str[cursor.kind] + " " + $cursor_kind_str[parent.kind]
 				end
+			end
+		when State::COMPOUND_ASSIGN
+			loop = compute_and_assign(cursor, parent, false)
+			if (loop)
+				machine_status = State::FUNC_BODY
+				next
 			end
 		else
 			raise "Invalid state"
 		end
+		loop = false
 	end
 end
 
