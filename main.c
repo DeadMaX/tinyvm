@@ -157,7 +157,7 @@ static void load(cpustate *state)
 static void store(cpustate *state)
 {
     /* store: opcode 0001
-     * layout: yyxx0000
+     * layout: yyxx0001
      * yy: 00 stack destination, 01 mem destination
      * xx: regnumber
      */
@@ -168,19 +168,19 @@ static void store(cpustate *state)
 		case 0:
 			{
 				memaddr arg = readmem(state);
-				vmmem[arg] = state->regs[regnum];
-			}
-			break;
-
-		case 1:
-			{
-				memaddr arg = readmem(state);
 				if (arg >= state->stackptr)
 				{
 					fprintf(stderr, "Stack fault\n");
 					exit(0);
 				}
 				vmstack[arg - state->stackptr - 1] = state->regs[regnum] ;
+			}
+			break;
+
+		case 1:
+			{
+				memaddr arg = readmem(state);
+				vmmem[arg] = state->regs[regnum];
 			}
 			break;
 
@@ -333,7 +333,7 @@ static void sub(cpustate *state)
 static void mul(cpustate *state)
 {
     /* mul: opcode 0110
-     * layout: yyxx0100
+     * layout: yyxx0110
      * yy: regnumber (00 for memory parameter)
      * xx: regnumber (00 for memory parameter)
      * result in reg 00
@@ -671,10 +671,15 @@ int main()
 	size_t off = 0;
 	char *buffer = malloc(len);
 	ssize_t rlen;
+	int fd = 0;
 
-	for (rlen = read(0, buffer + off, len - off);
+#if 1
+	fd = open("nullprog");
+#endif
+
+	for (rlen = read(fd, buffer + off, len - off);
 		 rlen > 0;
-		 rlen = read(0, buffer + off, len - off))
+		 rlen = read(fd, buffer + off, len - off))
 	{
 		off += rlen;
 		if (off == len)

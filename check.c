@@ -3,10 +3,11 @@
 
 void run()
 {
-	int a = 3;
+	int a = 2;
 	char *msg = "C'est la chenille qui redémarre :)";
 
-	a *= 2;
+	a *= a;
+	a += 1 + 1;
 	a = a * 7;
 	puts(msg);
 	puts(msg);

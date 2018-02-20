@@ -14,6 +14,23 @@ module Clangc
 		def data
 			return eval(text)
 		end
+		def CAoperator
+			['*=',
+			 '+='
+			].each do |op|
+				return op if text.index(op)
+			end
+			raise "Unknown operator"
+		end
+		def BINoperator
+			['=',
+			 '+',
+			 '*',
+			].each do |op|
+				return op if text.index(op)
+			end
+			raise "Unknown operator in " + text
+		end
 	end
 
 	class SourceLocation
@@ -209,8 +226,8 @@ first_pass = 0
 cl35.parse do |tu, cursor, parent|
 	next if ! cl35.cursor_in_main_file?(cursor)
 
-	loop = true
-	while loop
+	re_run = true
+	while re_run
 		case first_pass
 		when 0
 			if (cursor.kind == Clangc::CursorKind::CALL_EXPR)
@@ -228,15 +245,15 @@ cl35.parse do |tu, cursor, parent|
 				first_pass = 1
 			end
 		when 1
-			loop = parse_var(cursor, parent, false)
-			if (loop)
+			re_run = parse_var(cursor, parent, false)
+			if (re_run)
 				first_pass = 0
 				next
 			end
 		else
 			raise "Invalid state"
 		end
-		loop = false
+		re_run = false
 	end
 end
 
@@ -267,33 +284,251 @@ $vartab.each_value do |var|
 	print [var].pack("Q>")
 end
 
-def compute_and_assign(cursor, parent, is_new)
-	@prev ||= nil
-	@root ||= nil
-
-	if is_new
-		STDERR.puts "Start assign operator >" + cursor.result_type.kind.to_s + "<"
-
-		@root = cursor
-		@prev = cursor
-		return false
+class Basic_compile
+	def backup_stack(reg, cursor)
+		return if cursor.location.to_s == $function_start.location.to_s
+		reg <<= 4
+		reg |= 0x3
+		print [reg].pack("C")
 	end
-	return false
+
+	def restore_stack(reg, cursor)
+		return if cursor.location.to_s == $function_start.location.to_s
+		reg <<= 4;
+		reg |= 0x43
+		print [reg].pack("C")
+	end
+
+	def get_mem(cursor)
+		idx = 0
+		$vartab.each_key do |key|
+			break if key == cursor.spelling
+			idx = idx + 1
+		end
+		raise "Unknown var " + cursor.spelling if idx >= $vartab.length
+		return idx
+	end
+end
+
+class IntLit < Basic_compile
+	def initialize(cursor, parent)
+		@me = cursor
+	end
+	def compile(cursor, parent)
+		print "\xc0" + [@me.data].pack("Q>")
+		return true
+	end
+end
+
+class DeclRef < Basic_compile
+	def initialize(cursor, parent)
+		@me = cursor
+	end
+	def compile(cursor, parent)
+		print "\x40" + [get_mem(@me)].pack("C")
+		return true
+	end
+end
+
+class UnexposedExpr < Basic_compile
+	def initialize(cursor, parent)
+		@me = cursor
+		@next = nil
+	end
+
+	def compile(cursor, parent)
+		if @next == nil
+			raise "bug" if parent.location.to_s != @me.location.to_s
+
+			case cursor.kind
+			when Clangc::CursorKind::UNEXPOSED_EXPR
+				@next = UnexposedExpr.new(cursor, parent)
+			when Clangc::CursorKind::INTEGER_LITERAL
+				@next = IntLit.new(cursor, parent)
+			when Clangc::CursorKind::DECL_REF_EXPR
+				@next = DeclRef.new(cursor, parent)
+			else
+				raise "Unhandled " + $cursor_kind_str[cursor.kind]
+			end
+			return false
+		end
+		return @next.compile(cursor, parent)
+	end
+end
+
+class BinOP < Basic_compile
+	def initialize(cursor, parent)
+		@up = parent
+		@ope = cursor
+		@left = nil
+		@right = nil
+		backup_stack(1, @up)
+	end
+
+	def compile(cursor, parent)
+
+		if @left == nil
+			raise "bug" if parent.location.to_s != @ope.location.to_s
+
+			if @ope.BINoperator == "="
+				case cursor.kind
+				when Clangc::CursorKind::DECL_REF_EXPR
+					@left = cursor
+				else
+					raise "Unhandled " + $cursor_kind_str[cursor.kind]
+				end
+			else
+				case cursor.kind
+				when Clangc::CursorKind::UNEXPOSED_EXPR
+					@left = UnexposedExpr.new(cursor, parent)
+				when Clangc::CursorKind::BINARY_OPERATOR
+					@left = BinOP.new(cursor, parent)
+				when Clangc::CursorKind::INTEGER_LITERAL
+					@left = IntLit.new(cursor, parent)
+				when Clangc::CursorKind::DECL_REF_EXPR
+					@left = DeclRef.new(cursor, parent)
+				else
+					raise "Unhandled " + $cursor_kind_str[cursor.kind]
+				end
+			end
+			return false
+		end
+
+		if @right == nil
+			if @ope.BINoperator != "="
+				return false if @left.compile(cursor, parent) == false
+			end
+
+			# migrate data
+			backup_stack(0, @ope)
+			restore_stack(1, @ope)
+
+			raise "bug" if parent.location.to_s != @ope.location.to_s
+
+			case cursor.kind
+			when Clangc::CursorKind::UNEXPOSED_EXPR
+				@right = UnexposedExpr.new(cursor, parent)
+			when Clangc::CursorKind::BINARY_OPERATOR
+				@right = BinOP.new(cursor, parent)
+			when Clangc::CursorKind::INTEGER_LITERAL
+				@right = IntLit.new(cursor, parent)
+			else
+				raise "Unhandled " + $cursor_kind_str[cursor.kind]
+			end
+			return false
+		end
+		return false if @right.compile(cursor, parent) == false
+
+		case @ope.BINoperator
+		when "+"
+			backup_stack(2, @ope)
+			backup_stack(0, @ope)
+			restore_stack(2, @ope)
+			print "\x64"
+			restore_stack(2, @ope)
+		when "*"
+			backup_stack(2, @ope)
+			backup_stack(0, @ope)
+			restore_stack(2, @ope)
+			print "\x66"
+			restore_stack(2, @ope)
+		when "="
+			print "\x41" + [get_mem(@left)].pack("C")
+		else
+			raise "Unimplemented " + @ope.BINoperator
+		end
+
+		restore_stack(1, @up)
+
+		@up = nil
+		@ope = nil
+		@left = nil
+		@right = nil
+		return true
+	end
+end
+
+class ComputeAndAssign < Basic_compile
+	def initialize(cursor, parent)
+		@up = parent
+		@ope = cursor
+		@left = nil
+		@right = nil
+
+		backup_stack(1, @up)
+	end
+
+	def compile(cursor, parent)
+		if @left == nil
+			raise "bug" if parent.location.to_s != @ope.location.to_s
+
+			@left = cursor
+			return false
+		end
+
+		if @right == nil
+			raise "bug" if parent.location.to_s != @ope.location.to_s
+
+			case cursor.kind
+			when Clangc::CursorKind::UNEXPOSED_EXPR
+				@right = UnexposedExpr.new(cursor, parent)
+			when Clangc::CursorKind::BINARY_OPERATOR
+				@right = BinOP.new(cursor, parent)
+			else
+				raise "Unhandled " + $cursor_kind_str[cursor.kind]
+			end
+			return false
+		end
+
+		return false if @right.compile(cursor, parent) == false
+
+		raise "missing param" if @ope == nil || @left == nil || @right == nil
+		raise "Unknown result type" if @left.kind != Clangc::CursorKind::DECL_REF_EXPR
+
+		print "\x50" + [get_mem(@left)].pack("C")
+		case @ope.CAoperator
+		when "*="
+			backup_stack(2, @ope)
+			backup_stack(0, @ope)
+			restore_stack(2, @ope)
+			print "\x66"
+			restore_stack(2, @ope)
+		when "+="
+			backup_stack(2, @ope)
+			backup_stack(0, @ope)
+			restore_stack(2, @ope)
+			print "\x64"
+			restore_stack(2, @ope)
+		else
+			raise "Unimplemented"
+		end
+
+		print "\x41" + [get_mem(@left)].pack("C")
+
+		restore_stack(1, @up)
+
+		@up = nil
+		@ope = nil
+		@left = nil
+		@right = nil
+		return true
+	end
 end
 
 module State
   OUT = 0
   FUNC_DECL = 1
   FUNC_BODY = 2
-  COMPOUND_ASSIGN = 3
+  IN_PARSE = 3
 end
 machine_status = State::OUT
+cur_parse = nil
 
 cl35.parse do |tu, cursor, parent|
 	next if ! cl35.cursor_in_main_file?(cursor)
 
-	loop = true
-	while loop
+	re_run = true
+	while re_run
 		case machine_status
 		when State::OUT
 			if cursor.kind == Clangc::CursorKind::FUNCTION_DECL and cursor.spelling == "run"
@@ -311,21 +546,25 @@ cl35.parse do |tu, cursor, parent|
 				when Clangc::CursorKind::DECL_STMT
 					# IGNORE
 				when Clangc::CursorKind::COMPOUND_ASSIGN_OPERATOR
-					compute_and_assign(cursor, parent, true)
+					cur_parse = ComputeAndAssign.new(cursor, parent)
+				when Clangc::CursorKind::BINARY_OPERATOR
+					cur_parse = BinOP.new(cursor, parent)
 				else
 					raise "Unknown cursor " + $cursor_kind_str[cursor.kind] + " " + $cursor_kind_str[parent.kind]
 				end
+				machine_status = State::IN_PARSE if cur_parse != nil
 			end
-		when State::COMPOUND_ASSIGN
-			loop = compute_and_assign(cursor, parent, false)
-			if (loop)
+		when State::IN_PARSE
+			re_run = cur_parse.compile(cursor, parent)
+			if (re_run)
 				machine_status = State::FUNC_BODY
+				cur_parse = nil
 				next
 			end
 		else
 			raise "Invalid state"
 		end
-		loop = false
+		re_run = false
 	end
 end
 
