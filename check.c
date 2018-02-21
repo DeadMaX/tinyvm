@@ -1,16 +1,20 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+int fork();
+void execlp(const char *, int, int);
+
 void run()
 {
-	int a = 2;
-	char *msg = "C'est la chenille qui redémarre :)";
+	const char *SHELL = "SHELL";
+	int tmp;
 
-	a *= a;
-	a += 1 + 1;
-	a = a * 7;
-	puts(msg);
-	puts(msg);
-	puts(msg);
-	exit(a);
+	tmp = fork();
+
+	if (tmp == 0)
+	{
+		execlp(getenv(SHELL), 0, 0);
+	}
+
+	exit(0);
 }

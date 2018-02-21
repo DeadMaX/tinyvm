@@ -144,7 +144,10 @@ def getcall(val1, val2)
 	hash = {
 		"-0" => 0,
 	    "-04" => 1,
-		"-4P" => 2
+		"-4P" => 2,
+		"-4P4" => 3,
+		"-4P44" => 4,
+		"-4" => 5,
 		}
 
 	key = ""
@@ -208,7 +211,7 @@ def parse_var(cursor, parent, is_new)
 	when Clangc::CursorKind::STRING_LITERAL
 		$vartab.delete(@root.spelling)
 		if (! $strtab[cursor.data])
-			$strtab[cursor.data] = $current_str
+			$strtab[cursor.data] = @root.spelling
 			$current_str += 1
 		end
 	when Clangc::CursorKind::INTEGER_LITERAL
@@ -308,6 +311,26 @@ class Basic_compile
 		raise "Unknown var " + cursor.spelling if idx >= $vartab.length
 		return idx
 	end
+
+	def get_call(cursor)
+		idx = 0
+		$symtab.each_key do |key|
+			break if key == cursor.spelling
+			idx = idx + 1
+		end
+		raise "Unknown call " + cursor.spelling if idx >= $symtab.length
+		return idx
+	end
+
+	def get_str(cursor)
+		idx = 0
+		$strtab.each_value do |val|
+			break if val == cursor.spelling
+			idx = idx + 1
+		end
+		raise "Unknown str name " + cursor.spelling if idx >= $strtab.length
+		return idx
+	end
 end
 
 class IntLit < Basic_compile
@@ -320,12 +343,22 @@ class IntLit < Basic_compile
 	end
 end
 
+$in_func_def = false
 class DeclRef < Basic_compile
 	def initialize(cursor, parent)
 		@me = cursor
 	end
 	def compile(cursor, parent)
-		print "\x40" + [get_mem(@me)].pack("C")
+		case @me.type.kind
+		when Clangc::TypeKind::INT
+			print "\x40" + [get_mem(@me)].pack("C")
+		when Clangc::TypeKind::POINTER
+			print "\x80" + [get_str(@me)].pack("C")
+		when Clangc::TypeKind::FUNCTION_PROTO
+			raise "Not in function" if ! $in_func_def
+		else
+			raise "Unknown type " + $type_kind_str[@me.type.kind]
+		end
 		return true
 	end
 end
@@ -412,6 +445,8 @@ class BinOP < Basic_compile
 				@right = BinOP.new(cursor, parent)
 			when Clangc::CursorKind::INTEGER_LITERAL
 				@right = IntLit.new(cursor, parent)
+			when Clangc::CursorKind::CALL_EXPR
+				@right = CallExpr.new(cursor, parent)
 			else
 				raise "Unhandled " + $cursor_kind_str[cursor.kind]
 			end
@@ -474,6 +509,8 @@ class ComputeAndAssign < Basic_compile
 				@right = UnexposedExpr.new(cursor, parent)
 			when Clangc::CursorKind::BINARY_OPERATOR
 				@right = BinOP.new(cursor, parent)
+			when Clangc::CursorKind::INTEGER_LITERAL
+				@right = IntLit.new(cursor, parent)
 			else
 				raise "Unhandled " + $cursor_kind_str[cursor.kind]
 			end
@@ -515,6 +552,78 @@ class ComputeAndAssign < Basic_compile
 	end
 end
 
+class CallExpr < Basic_compile
+	def initialize(cursor, parent)
+		@up = parent
+		@call = cursor
+		@def = nil
+		@def_done = false
+		@params = {}
+	end
+
+	def newchild(cursor, parent)
+		case cursor.kind
+		when Clangc::CursorKind::UNEXPOSED_EXPR
+			pp = UnexposedExpr.new(cursor, parent)
+		when Clangc::CursorKind::BINARY_OPERATOR
+			pp = BinOP.new(cursor, parent)
+		when Clangc::CursorKind::INTEGER_LITERAL
+			pp = IntLit.new(cursor, parent)
+		else
+			raise "Unhandled " + $cursor_kind_str[cursor.kind]
+		end
+		@params[@params.length] = pp
+	end
+
+	def compile(cursor, parent)
+
+		if !@def_done
+			if @def == nil
+				$in_func_def = true
+
+				raise "bug" if cursor.kind != Clangc::CursorKind::UNEXPOSED_EXPR
+				@def = UnexposedExpr.new(cursor, parent)
+				return false
+			end
+			return false if @def.compile(cursor, parent) == false
+			@def_done = true
+			$in_func_def = false
+		end
+
+		if @call.num_arguments == 0
+			raise "bug" if parent.location.to_s == @call.location.to_s
+
+			print "\x2" + [get_call(@call)].pack("C")
+			return true
+		end
+
+		if @params.length == 0
+			newchild(cursor, parent)
+			return false
+		end
+
+		if @params.length < @call.num_arguments
+			return false if @params[@params.length - 1].compile(cursor, parent) == false
+			backup_stack(0, @call)
+			newchild(cursor, parent)
+			return false
+		end
+		return false if @params[@params.length - 1].compile(cursor, parent) == false
+
+		backup_stack(0, @call) if (@call.num_arguments != 1)
+
+		restore_stack(3, @call) if @call.num_arguments > 3
+		restore_stack(2, @call) if @call.num_arguments > 2
+		restore_stack(1, @call) if @call.num_arguments > 1
+
+		restore_stack(0, @call) if (@call.num_arguments != 1)
+
+		print "\x2" + [get_call(@call)].pack("C")
+
+		return true
+	end
+end
+
 module State
   OUT = 0
   FUNC_DECL = 1
@@ -549,6 +658,8 @@ cl35.parse do |tu, cursor, parent|
 					cur_parse = ComputeAndAssign.new(cursor, parent)
 				when Clangc::CursorKind::BINARY_OPERATOR
 					cur_parse = BinOP.new(cursor, parent)
+				when Clangc::CursorKind::CALL_EXPR
+					cur_parse = CallExpr.new(cursor, parent)
 				else
 					raise "Unknown cursor " + $cursor_kind_str[cursor.kind] + " " + $cursor_kind_str[parent.kind]
 				end
@@ -567,5 +678,5 @@ cl35.parse do |tu, cursor, parent|
 		re_run = false
 	end
 end
+cur_parse.compile(nil, nil)
 
-print "\x80\0\2\0\x40\0\2\1"

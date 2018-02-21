@@ -30,6 +30,9 @@ static enum
 	VOID_VOID = 0,
 	VOID_INT,
 	INT_POINTER,
+	INT_POINTER_INT,
+	INT_POINTER_INT_INT,
+	INT_VOID,
 
 	SYMS_TYPE_MAX
 } syms_type[MAXSYMS];
@@ -195,11 +198,8 @@ static void call(cpustate *state)
 {
     /* call: opcode 0010
      * layout: xyyy0010
-     * x: 0 stack parameter, 1 mem parameter
-     * yyy: argcount;
+     * xxxx:
      */
-	uint8_t paramcount = ((*state->pc) & 0x70) >> 4;
-	bool mem = ((*state->pc) & 0x80) ? true : false;
 	callnum func = readfunc(state);
 	if (!syms[func])
 	{
@@ -216,6 +216,16 @@ static void call(cpustate *state)
 			break;
 		case INT_POINTER:
 			state->regs[0] = ((int (*)(void *))syms[func])((void *)state->regs[0]);
+			break;
+		case INT_POINTER_INT:
+			state->regs[0] = ((int (*)(void *, int))syms[func])((void *)state->regs[0], (int)state->regs[1]);
+			break;
+		case INT_POINTER_INT_INT:
+			state->regs[0] = ((int (*)(void *, int, int))syms[func])((void *)state->regs[0], (int)state->regs[1],
+							(int)state->regs[2]);
+			break;
+		case INT_VOID:
+			state->regs[0] = ((int (*)(void))syms[func])();
 			break;
 
 		default:
