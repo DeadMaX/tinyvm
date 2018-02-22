@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <dlfcn.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -33,6 +34,10 @@ static enum
 	INT_POINTER_INT,
 	INT_POINTER_INT_INT,
 	INT_VOID,
+	VOID_POINTER_INT_INT,
+	POINTER_POINTER,
+	INT_POINTER_POINTER_POINTER,
+	INT_INT_POINTER_INT,
 
 	SYMS_TYPE_MAX
 } syms_type[MAXSYMS];
@@ -227,7 +232,20 @@ static void call(cpustate *state)
 		case INT_VOID:
 			state->regs[0] = ((int (*)(void))syms[func])();
 			break;
-
+		case VOID_POINTER_INT_INT:
+			((void (*)(void *, int, int))syms[func])((void *)state->regs[0], (int)state->regs[1], (int)state->regs[2]);
+			break;
+		case POINTER_POINTER:
+			state->regs[0] = (uintptr_t)((void *(*)(void *))syms[func])((void *)state->regs[0]);
+			break;
+		case INT_POINTER_POINTER_POINTER:
+			state->regs[0] = ((int (*)(void *, void *, void *))syms[func])((void *)state->regs[0],
+							 (void *)state->regs[1], (void *)state->regs[2]);
+			break;
+		case INT_INT_POINTER_INT:
+			state->regs[0] = ((int (*)(int, void *, int))syms[func])((int)state->regs[0],
+							 (void *)state->regs[1], (int)state->regs[2]);
+			break;
 		default:
 			fprintf(stderr, "Bad call\n");
 			exit(0);
@@ -274,33 +292,16 @@ static void add(cpustate *state)
 {
     /* add: opcode 0100
      * layout: yyxx0100
-     * yy: regnumber (00 for memory parameter)
-     * xx: regnumber (00 for memory parameter)
+     * yy: regnumber
+     * xx: regnumbe
      * result in reg 00
      */
 	uint64_t val1, val2;
 	uint8_t regnum1 = ((*state->pc) & 0x30) >> 4;
 	uint8_t regnum2 = ((*state->pc) & 0xc0) >> 6;
 
-	if (regnum1 == 0)
-	{
-		memaddr a = readmem(state);
-		val1 = vmmem[a];
-	}
-	else
-	{
-		val1 = state->regs[regnum1];
-	}
-
-	if (regnum2 == 0)
-	{
-		memaddr a = readmem(state);
-		val2 = vmmem[a];
-	}
-	else
-	{
-		val2 = state->regs[regnum2];
-	}
+	val1 = state->regs[regnum1];
+	val2 = state->regs[regnum2];
 
 	state->regs[0] = val1 + val2;
 }
@@ -309,33 +310,16 @@ static void sub(cpustate *state)
 {
     /* sub: opcode 0101
      * layout: yyxx0100
-     * yy: regnumber (00 for memory parameter)
-     * xx: regnumber (00 for memory parameter)
+     * yy: regnumber
+     * xx: regnumber
      * result in reg 00
      */
 	uint64_t val1, val2;
 	uint8_t regnum1 = ((*state->pc) & 0x30) >> 4;
 	uint8_t regnum2 = ((*state->pc) & 0xc0) >> 6;
 
-	if (regnum1 == 0)
-	{
-		memaddr a = readmem(state);
-		val1 = vmmem[a];
-	}
-	else
-	{
-		val1 = state->regs[regnum1];
-	}
-
-	if (regnum2 == 0)
-	{
-		memaddr a = readmem(state);
-		val2 = vmmem[a];
-	}
-	else
-	{
-		val2 = state->regs[regnum2];
-	}
+	val1 = state->regs[regnum1];
+	val2 = state->regs[regnum2];
 
 	state->regs[0] = val1 - val2;
 }
@@ -344,33 +328,16 @@ static void mul(cpustate *state)
 {
     /* mul: opcode 0110
      * layout: yyxx0110
-     * yy: regnumber (00 for memory parameter)
-     * xx: regnumber (00 for memory parameter)
+     * yy: regnumber
+     * xx: regnumber
      * result in reg 00
      */
 	uint64_t val1, val2;
 	uint8_t regnum1 = ((*state->pc) & 0x30) >> 4;
 	uint8_t regnum2 = ((*state->pc) & 0xc0) >> 6;
 
-	if (regnum1 == 0)
-	{
-		memaddr a = readmem(state);
-		val1 = vmmem[a];
-	}
-	else
-	{
-		val1 = state->regs[regnum1];
-	}
-
-	if (regnum2 == 0)
-	{
-		memaddr a = readmem(state);
-		val2 = vmmem[a];
-	}
-	else
-	{
-		val2 = state->regs[regnum2];
-	}
+	val1 = state->regs[regnum1];
+	val2 = state->regs[regnum2];
 
 	state->regs[0] = val1 * val2;
 }
@@ -379,33 +346,16 @@ static void divide(cpustate *state)
 {
     /* div: opcode 0111
      * layout: yyxx0100
-     * yy: regnumber (00 for memory parameter)
-     * xx: regnumber (00 for memory parameter)
+     * yy: regnumber
+     * xx: regnumber
      * result in reg 00
      */
 	uint64_t val1, val2;
 	uint8_t regnum1 = ((*state->pc) & 0x30) >> 4;
 	uint8_t regnum2 = ((*state->pc) & 0xc0) >> 6;
 
-	if (regnum1 == 0)
-	{
-		memaddr a = readmem(state);
-		val1 = vmmem[a];
-	}
-	else
-	{
-		val1 = state->regs[regnum1];
-	}
-
-	if (regnum2 == 0)
-	{
-		memaddr a = readmem(state);
-		val2 = vmmem[a];
-	}
-	else
-	{
-		val2 = state->regs[regnum2];
-	}
+	val1 = state->regs[regnum1];
+	val2 = state->regs[regnum2];
 
 	state->regs[0] = val1 / val2;
 }
@@ -414,33 +364,16 @@ static void remider(cpustate *state)
 {
     /* remider: opcode 1000
      * layout: yyxx1000
-     * yy: regnumber (00 for memory parameter)
-     * xx: regnumber (00 for memory parameter)
+     * yy: regnumber
+     * xx: regnumber
      * result in reg 00
      */
 	uint64_t val1, val2;
 	uint8_t regnum1 = ((*state->pc) & 0x30) >> 4;
 	uint8_t regnum2 = ((*state->pc) & 0xc0) >> 6;
 
-	if (regnum1 == 0)
-	{
-		memaddr a = readmem(state);
-		val1 = vmmem[a];
-	}
-	else
-	{
-		val1 = state->regs[regnum1];
-	}
-
-	if (regnum2 == 0)
-	{
-		memaddr a = readmem(state);
-		val2 = vmmem[a];
-	}
-	else
-	{
-		val2 = state->regs[regnum2];
-	}
+	val1 = state->regs[regnum1];
+	val2 = state->regs[regnum2];
 
 	state->regs[0] = val1 % val2;
 }
@@ -448,7 +381,7 @@ static void remider(cpustate *state)
 static void test(cpustate *state)
 {
     /* test: opcode 1001
-     * layout: yyxx1000
+     * layout: yyxx1001
      */
 	uint8_t regnum1 = ((*state->pc) & 0x30) >> 4;
 	uint8_t regnum2 = ((*state->pc) & 0xc0) >> 6;
@@ -476,7 +409,7 @@ static void test(cpustate *state)
 static void jump(cpustate *state)
 {
     /* test: opcode 1010
-     * layout: wzyx1000
+     * layout: wzyx1010
      * x: equal
      * y: lesser
      * z: greater
@@ -484,7 +417,7 @@ static void jump(cpustate *state)
      */
 
     uint8_t param = (*state->pc);
-    memaddr to = readmem(state);
+    uint64_t to = readval(state);
 
 	if (param & 0x80)
 	{
@@ -684,7 +617,7 @@ int main()
 	int fd = 0;
 
 #if 1
-	fd = open("nullprog");
+	fd = open("nullprog", O_RDONLY);
 #endif
 
 	for (rlen = read(fd, buffer + off, len - off);
