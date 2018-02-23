@@ -8,18 +8,28 @@ typedef const char * fwdchar;
 void run()
 {
 	const char *SHELL = "SHELL";
+	const char *DASH_I = "-is";
+	const char *EXIT = "exit\n";
 	pid_t tmp;
 	const char *tmpc;
+	int pip[2];
+
+	pipe(pip);
 
 	tmp = fork();
-	tmpc = getenv(SHELL);
-
 	if (tmp == 0)
 	{
-		execlp(tmpc, tmpc, NULL);
+		dup2(pip[0], 0);
+		close(pip[0]);
+		close(pip[1]);
+		tmpc = getenv(SHELL);
+		execlp(tmpc, tmpc, DASH_I, NULL);
 	}
  	else
  	{
+		close(pip[0]);
+		sleep(5);
+		write(pip[1], EXIT, 5);
 		waitpid(tmp, NULL, 0);
  	}
 

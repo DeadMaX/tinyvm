@@ -58,6 +58,8 @@ end
 require 'fileutils'
 require 'pp'
 
+$code_offset = 0
+
 $current_sym = 0
 $symtab = {}
 
@@ -167,6 +169,11 @@ def getcall(val1, val2)
 		"-PP" => 7,
 		"-4PPP" => 8,
 		"-44P4" => 9,
+		"-444" => 10,
+		"-44" => 11,
+		"-4PPPPP" => 12,
+		"-4PPPP" => 13,
+		"-84P8" => 14,
 		}
 
 	key = ""
@@ -174,6 +181,8 @@ def getcall(val1, val2)
 	case val1.type.kind
 	when Clangc::TypeKind::VOID
 		key += "-0"
+	when Clangc::TypeKind::U_INT
+		key += "-4"
 	when Clangc::TypeKind::INT
 		key += "-4"
 	when Clangc::TypeKind::POINTER
@@ -182,15 +191,19 @@ def getcall(val1, val2)
 		case val1.type.size_of
 		when 4
 			key += "-4"
+		when 8
+			key += "-8"
 		else
 			raise "Invalid return size " + val1.type.size_of.to_s
 		end
 	else
-		raise "Unknown return type " + $type_kind_str[val1]
+		raise "Unknown return type " + $type_kind_str[val1.type.kind]
 	end
 
 	val2.each do |arg|
 		case arg.type.kind
+		when Clangc::TypeKind::U_INT
+			key += "4"
 		when Clangc::TypeKind::INT
 			key += "4"
 		when Clangc::TypeKind::POINTER
@@ -199,8 +212,10 @@ def getcall(val1, val2)
 			case arg.type.size_of
 			when 4
 				key += "4"
+			when 8
+				key += "8"
 			else
-				raise "Invalid return size " + val1.type.size_of.to_s
+				raise "Invalid call size " + val1.type.size_of.to_s
 			end
 		else
 			raise "Unknown parameter type \"" + $type_kind_str[arg.type.kind] + "\""
@@ -208,7 +223,7 @@ def getcall(val1, val2)
 	end
 
 	if (!hash[key])
-		raise "Not function type defined: " + key
+		raise "Not function type defined for " + val1.spelling + ": " + key
 	end
 
 	return hash[key]
@@ -234,6 +249,12 @@ def parse_var(cursor, parent, is_new)
 		when Clangc::TypeKind::TYPEDEF
 			raise "Type too long" if cursor.type.size_of > 8
 			$vartab[cursor.spelling] = 0
+		when Clangc::TypeKind::CONSTANT_ARRAY
+			count = 0
+			while count < cursor.type.size_of
+				$vartab[cursor.spelling + count.to_s] = 0
+				count += 8
+			end
 		else
 			raise "unknown type " + $type_kind_str[cursor.type.kind]
 		end
@@ -281,10 +302,6 @@ cl35.parse do |tu, cursor, parent|
 		case first_pass
 		when 0
 			if (cursor.kind == Clangc::CursorKind::CALL_EXPR)
-				if (cursor.num_arguments > 4)
-					raise "too many argument"
-				end
-
 				if (! $symtab[cursor.spelling])
 					$symtab[cursor.spelling] = [$current_sym, getcall(cursor, cursor.arguments)]
 					$current_sym += 1
@@ -349,13 +366,13 @@ class Basic_compile
 		stream.print [reg].pack("C")
 	end
 
-	def get_mem(cursor)
+	def get_mem(name)
 		idx = 0
 		$vartab.each_key do |key|
-			break if key == cursor.spelling
+			break if key == name
 			idx = idx + 1
 		end
-		raise "Unknown var " + cursor.spelling if idx >= $vartab.length
+		raise "Unknown var " + name if idx >= $vartab.length
 		return idx
 	end
 
@@ -399,20 +416,73 @@ class DeclRef < Basic_compile
 		case @me.type.kind
 		when Clangc::TypeKind::TYPEDEF
 			raise "Type too long" if cursor.type.size_of > 8
-			stream.print "\x40" + [get_mem(@me)].pack("C")
+			stream.print "\x40" + [get_mem(@me.spelling)].pack("C")
 		when Clangc::TypeKind::INT
-			stream.print "\x40" + [get_mem(@me)].pack("C")
+			stream.print "\x40" + [get_mem(@me.spelling)].pack("C")
 		when Clangc::TypeKind::POINTER
 			if $vartab[@me.spelling]
-				stream.print "\x40" + [get_mem(@me)].pack("C")
+				stream.print "\x40" + [get_mem(@me.spelling)].pack("C")
 			else
 				stream.print "\x80" + [get_str(@me)].pack("C")
 			end
 		when Clangc::TypeKind::FUNCTION_PROTO
 			raise "Not in function" if ! $in_func_def
+		when Clangc::TypeKind::CONSTANT_ARRAY
+			raise "unknown var " +@me.spelling + "0" if !$vartab[@me.spelling + "0"]
+			stream.print "\x00" + [get_mem(@me.spelling + "0")].pack("C")
 		else
 			raise "Unknown type " + $type_kind_str[@me.type.kind]
 		end
+		return true
+	end
+end
+
+class ArrayStuff < Basic_compile
+	def initialize(cursor, parent)
+		@me = cursor
+		@cast = nil
+		@var = nil
+		@expr = nil
+	end
+
+	def compile(cursor, parent, stream)
+		if @cast == nil
+			raise "bug" if parent.location.to_s != @me.location.to_s
+			raise "bug" if cursor.kind != Clangc::CursorKind::UNEXPOSED_EXPR
+			@cast = cursor
+			return false
+		end
+		if @var == nil
+			raise "bug" if parent.location.to_s != @cast.location.to_s
+			@var = cursor
+			return false
+		end
+		if @expr == nil
+			raise "bug" if parent.location.to_s != @me.location.to_s
+			case cursor.kind
+			when Clangc::CursorKind::INTEGER_LITERAL
+				@expr = cursor.data
+			else
+				raise "Unhandled " + $cursor_kind_str[cursor.kind]
+			end
+			return false
+		end
+#		return false if @expr.parse(cursor, parent, stream) == false
+
+		raise "Type too long" if @me.type.size_of > 8
+		
+		offset = (@me.type.size_of * @expr) % 8;
+		var_num = (@me.type.size_of * @expr) / 8;
+
+		stream.print "\x40" + [get_mem(@var.spelling + var_num.to_s)].pack("C")
+		if offset == 0
+			return true
+		end
+
+		backup_stack(1, @me, stream)
+		stream.print "\xd0" + [2**(offset * 8)].pack("Q>") + "\x47"
+		restore_stack(1, @me, stream)
+
 		return true
 	end
 end
@@ -440,6 +510,8 @@ class UnexposedExpr < Basic_compile
 				@next = DeclRef.new(cursor, parent)
 			when Clangc::CursorKind::CALL_EXPR
 				@next = CallExpr.new(cursor, parent)
+			when Clangc::CursorKind::ARRAY_SUBSCRIPT_EXPR
+				@next = ArrayStuff.new(cursor, parent)
 			else
 				raise "Unhandled " + $cursor_kind_str[cursor.kind]
 			end
@@ -520,7 +592,7 @@ class BinOP < Basic_compile
 		when "*"
 			stream.print "\x16"
 		when "="
-			stream.print "\x41" + [get_mem(@left)].pack("C")
+			stream.print "\x41" + [get_mem(@left.spelling)].pack("C")
 		else
 			raise "Unimplemented " + @ope.BINoperator
 		end
@@ -633,7 +705,7 @@ class ComputeAndAssign < Basic_compile
 		raise "missing param" if @ope == nil || @left == nil || @right == nil
 		raise "Unknown result type" if @left.kind != Clangc::CursorKind::DECL_REF_EXPR
 
-		stream.print "\x50" + [get_mem(@left)].pack("C")
+		stream.print "\x50" + [get_mem(@left.spelling)].pack("C")
 		case @ope.CAoperator
 		when "*="
 			stream.print "\x16"
@@ -643,7 +715,7 @@ class ComputeAndAssign < Basic_compile
 			raise "Unimplemented"
 		end
 
-		stream.print "\x41" + [get_mem(@left)].pack("C")
+		stream.print "\x41" + [get_mem(@left.spelling)].pack("C")
 
 		restore_stack(1, @up, stream)
 
@@ -677,7 +749,7 @@ class CallExpr < Basic_compile
 		else
 			raise "Unhandled " + $cursor_kind_str[cursor.kind]
 		end
-		@params[@params.length] = pp
+		@params[@params.length] = [pp, StringIO.new]
 	end
 
 	def compile(cursor, parent, stream)
@@ -708,24 +780,69 @@ class CallExpr < Basic_compile
 		end
 
 		if @params.length < @call.num_arguments
-			return false if @params[@params.length - 1].compile(cursor, parent, stream) == false
-			backup_stack(0, @call, stream)
+			return false if @params[@params.length - 1][0].compile(cursor, parent, @params[@params.length - 1][1]) == false
+			backup_stack(0, @call, @params[@params.length - 1][1])
+			$code_offset += @params[@params.length - 1][1].length
 			newchild(cursor, parent)
 			return false
 		end
-		return false if @params[@params.length - 1].compile(cursor, parent, stream) == false
+		return false if @params[@params.length - 1][0].compile(cursor, parent, @params[@params.length - 1][1]) == false
+		backup_stack(0, @call, @params[@params.length - 1][1])
+		$code_offset += @params[@params.length - 1][1].length
 
-		backup_stack(0, @call, stream) if (@call.num_arguments != 1)
-
-		restore_stack(3, @call, stream) if @call.num_arguments > 3
-		restore_stack(2, @call, stream) if @call.num_arguments > 2
+		i = @call.num_arguments - 1
+		while i >= 0
+			stream << @params[i][1].string
+			$code_offset -= @params[i][1].length
+			i -= 1
+		end
+		
+		restore_stack(0, @call, stream) if @call.num_arguments > 0
 		restore_stack(1, @call, stream) if @call.num_arguments > 1
-
-		restore_stack(0, @call, stream) if (@call.num_arguments != 1)
+		restore_stack(2, @call, stream) if @call.num_arguments > 2
+		restore_stack(3, @call, stream) if @call.num_arguments > 3
 
 		stream.print "\x2" + [get_call(@call)].pack("C")
 
+		i = 4
+		while i < @call.num_arguments
+			restore_stack(1, @call, stream)
+			i += 1
+		end
+
 		return true
+	end
+end
+
+class Compo < Basic_compile
+	def initialize(cursor, parent)
+		@me = cursor
+		@cur = nil
+		@skipping = false
+	end
+
+	def compile(cursor, parent, stream)
+		if @cur == nil
+			return false if @skipping && parent.location.to_s != @me.location.to_s
+			@skipping = false
+			return true if parent == nil || parent.location.to_s != @me.location.to_s
+			case cursor.kind
+			when Clangc::CursorKind::DECL_STMT
+				@skipping = true
+			when Clangc::CursorKind::BINARY_OPERATOR
+				@cur = BinOP.new(cursor, parent)
+			when Clangc::CursorKind::CALL_EXPR
+				@cur = CallExpr.new(cursor, parent)
+			when Clangc::CursorKind::IF_STMT
+				@cur = IfExpr.new(cursor, parent)
+			else
+				raise "Unhandled " + $cursor_kind_str[cursor.kind]
+			end
+			return false
+		end
+		return false if @cur.compile(cursor, parent, stream) == false
+		@cur = nil
+		return compile(cursor, parent, stream)
 	end
 end
 
@@ -735,13 +852,11 @@ class IfExpr < Basic_compile
 		@stmt = cursor
 		@cond = nil
 		@cond_done = false
-		@then_start = nil
 		@then = nil
 		@then_done = false
 		@then_stream = StringIO.new
-		@else_start = nil
 		@else = nil
-		@else_done = false
+		@else_stream = StringIO.new
 	end
 	def compile(cursor, parent, stream)
 		if @cond_done == false
@@ -763,44 +878,44 @@ class IfExpr < Basic_compile
 			end
 		end
 		if @then_done == false
-			if @then_start == nil
+			if @then == nil
 				raise "bug" if parent.location.to_s != @stmt.location.to_s
 				raise "bug" if cursor.kind != Clangc::CursorKind::COMPOUND_STMT
-				@then_start = cursor
-				return false
-			end
-			if @then == nil
-				raise "bug" if parent.location.to_s != @then_start.location.to_s
-				case cursor.kind
-				when Clangc::CursorKind::CALL_EXPR
-					@then = CallExpr.new(cursor, parent)
-				else
-					raise "Unhandled " + $cursor_kind_str[cursor.kind]
-				end
+				$code_offset += stream.length + 8
+				@then = Compo.new(cursor, parent)
 				return false
 			end
 			return false if @then.compile(cursor, parent, @then_stream) == false
 			@then_done = true
-			jump = stream.length + 9 + @then_stream.length
-			stream.print [jump].pack("Q>") + @then_stream.string
 		end
 
-		if parent.location.to_s != @stmt.location.to_s
-			return true
+		if @else == nil
+			if parent.location.to_s != @stmt.location.to_s
+				jump = $code_offset + @then_stream.length
+				$code_offset -= stream.length + 8
+				stream.print [jump].pack("Q>") + @then_stream.string
+				return true
+			end
+			raise "bug" if cursor.kind != Clangc::CursorKind::COMPOUND_STMT
+			@else = Compo.new(cursor, parent)
+			jump = $code_offset + @then_stream.length + 9
+			stream.print [jump].pack("Q>") + @then_stream.string + "\xa"
+			return false
 		end
-		raise "bug" if cursor.kind != Clangc::CursorKind::COMPOUND_STMT
+		return false if @else.compile(cursor, parent, @else_stream) == false
 
-		raise "Unhandled " + $cursor_kind_str[cursor.kind]
+		jump = $code_offset + @else_stream.length
+		$code_offset -= stream.length + 8
+		stream.print [jump].pack("Q>") + @else_stream.string
 
-		return false
+		return true
 	end
 end
 
 module State
   OUT = 0
-  FUNC_DECL = 1
-  FUNC_BODY = 2
-  IN_PARSE = 3
+  FUNC_BODY = 1
+  IN_PARSE = 2
 end
 machine_status = State::OUT
 cur_parse = nil
@@ -815,32 +930,13 @@ cl35.parse do |tu, cursor, parent|
 		case machine_status
 		when State::OUT
 			if cursor.kind == Clangc::CursorKind::FUNCTION_DECL and cursor.spelling == "run"
-				machine_status = State::FUNC_DECL
+				machine_status = State::FUNC_BODY
 			end
-		when State::FUNC_DECL
-			if cursor.kind != Clangc::CursorKind::COMPOUND_STMT
-				raise "No function body"
-			end
-			machine_status = State::FUNC_BODY
-			$function_start = cursor
 		when State::FUNC_BODY
-			if parent.location.to_s == $function_start.location.to_s
-				case cursor.kind
-				when Clangc::CursorKind::DECL_STMT
-					# IGNORE
-				when Clangc::CursorKind::COMPOUND_ASSIGN_OPERATOR
-					cur_parse = ComputeAndAssign.new(cursor, parent)
-				when Clangc::CursorKind::BINARY_OPERATOR
-					cur_parse = BinOP.new(cursor, parent)
-				when Clangc::CursorKind::CALL_EXPR
-					cur_parse = CallExpr.new(cursor, parent)
-				when Clangc::CursorKind::IF_STMT
-					cur_parse = IfExpr.new(cursor, parent)
-				else
-					raise "Unknown cursor " + $cursor_kind_str[cursor.kind] + " " + $cursor_kind_str[parent.kind]
-				end
-				machine_status = State::IN_PARSE if cur_parse != nil
-			end
+			raise "No function body" if cursor.kind != Clangc::CursorKind::COMPOUND_STMT
+			$function_start = cursor
+			cur_parse = Compo.new(cursor, parent)
+			machine_status = State::IN_PARSE
 		when State::IN_PARSE
 			re_run = cur_parse.compile(cursor, parent, codeBuffer)
 			if (re_run)

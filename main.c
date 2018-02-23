@@ -38,6 +38,11 @@ static enum
 	POINTER_POINTER,
 	INT_POINTER_POINTER_POINTER,
 	INT_INT_POINTER_INT,
+	INT_INT_INT,
+	INT_INT,
+	INT_POINTER_POINTER_POINTER_POINTER_POINTER,
+	INT_POINTER_POINTER_POINTER_POINTER,
+	LONG_INT_POINTER_LONG,
 
 	SYMS_TYPE_MAX
 } syms_type[MAXSYMS];
@@ -116,7 +121,7 @@ static void load(cpustate *state)
 {
     /* load: opcode 0000
      * layout: yyxx0000
-     * y: source:  00 stack, 01 memory, 10 string pointer, 11 immediate
+     * y: source:  00 mem pointer, 01 memory, 10 string pointer, 11 immediate
      * xx: regnumber
      */
 	uint8_t regnum = ((*state->pc) & 0x30) >> 4;
@@ -126,12 +131,7 @@ static void load(cpustate *state)
 		case 0:
 			{
 				memaddr arg = readmem(state);
-				if (arg >= state->stackptr)
-				{
-					fprintf(stderr, "Stack not init\n");
-					exit(0);
-				}
-				state->regs[regnum] = vmstack[arg - state->stackptr - 1];
+				state->regs[regnum] = (uintptr_t)&vmmem[arg];
 			}
 			break;
 
@@ -166,7 +166,7 @@ static void store(cpustate *state)
 {
     /* store: opcode 0001
      * layout: yyxx0001
-     * yy: 00 stack destination, 01 mem destination
+     * yy: 00 mem pointer, 01 mem destination
      * xx: regnumber
      */
 	uint8_t regnum = ((*state->pc) & 0x30) >> 4;
@@ -175,8 +175,9 @@ static void store(cpustate *state)
 	{
 		case 0:
 			{
+				fprintf(stderr, "Huh ?!?\n");
+				exit(0);
 				memaddr arg = readmem(state);
-				if (arg >= state->stackptr)
 				{
 					fprintf(stderr, "Stack fault\n");
 					exit(0);
@@ -245,6 +246,31 @@ static void call(cpustate *state)
 		case INT_INT_POINTER_INT:
 			state->regs[0] = ((int (*)(int, void *, int))syms[func])((int)state->regs[0],
 							 (void *)state->regs[1], (int)state->regs[2]);
+			break;
+		case INT_INT_INT:
+			state->regs[0] = ((int (*)(int, int))syms[func])((int)state->regs[0],
+							 (int)state->regs[1]);
+			break;
+		case INT_INT:
+			state->regs[0] = ((int (*)(int))syms[func])((int)state->regs[0]);
+			break;
+		case INT_POINTER_POINTER_POINTER_POINTER_POINTER:
+			if (state->stackptr == 0)
+			{
+				fprintf(stderr, "stack underflow\n");
+				exit(0);
+			}
+			state->regs[0] = ((int (*)(void *, void *, void *, void *, void *))syms[func])((void *)state->regs[0],
+							 (void *)state->regs[1], (void *)state->regs[2], (void *)state->regs[3],
+							(void *)vmstack[state->stackptr - 1]);
+			break;
+		case INT_POINTER_POINTER_POINTER_POINTER:
+			state->regs[0] = ((int (*)(void *, void *, void *, void *))syms[func])((void *)state->regs[0],
+							 (void *)state->regs[1], (void *)state->regs[2], (void *)state->regs[3]);
+			break;
+		case LONG_INT_POINTER_LONG:
+			state->regs[0] = ((uint64_t (*)(int, void *, uint64_t))syms[func])((int)state->regs[0],
+							 (void *)state->regs[1], (uint64_t)state->regs[2]);
 			break;
 		default:
 			fprintf(stderr, "Bad call\n");
@@ -345,7 +371,7 @@ static void mul(cpustate *state)
 static void divide(cpustate *state)
 {
     /* div: opcode 0111
-     * layout: yyxx0100
+     * layout: yyxx0111
      * yy: regnumber
      * xx: regnumber
      * result in reg 00
@@ -434,6 +460,7 @@ static void jump(cpustate *state)
 		fprintf(stderr, "Invalid jump\n");
 		exit (0);
 	}
+	--state->pc;
 }
 
 static void inc_dec(cpustate *state)
