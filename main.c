@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -42,6 +43,7 @@ static enum
 	POINTER_INT_POINTER,
 	LONG_INT_POINTER_LONG,
 	LONG_POINTER,
+	LONG_POINTER_LONG_POINTER_POINTER,
 
 	SYMS_TYPE_MAX
 } syms_type[MAXSYMS];
@@ -266,6 +268,10 @@ static void call(cpustate *state)
 			break;
 		case LONG_POINTER:
 			state->regs[0] = ((u_long (*)(void *))syms[func])((void *)state->regs[0]);
+			break;
+		case LONG_POINTER_LONG_POINTER_POINTER:
+			state->regs[0] = ((u_long (*)(void *, u_long, void *, void *))syms[func])((void *)state->regs[0],
+							  (u_long)state->regs[1], (void *)state->regs[2], (void *)state->regs[3]);
 			break;
 
 		default:

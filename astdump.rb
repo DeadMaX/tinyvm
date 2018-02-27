@@ -88,7 +88,12 @@ class SourceParser
 		@base_dir = base_dir ||= File.expand_path(File.dirname(@source_file))
 		include_libs = build_default_include_libs
 		args = ["-x", lang] + include_libs
-		args += ["-Xclang", "-detailed-preprocessing-record", "-ferror-limit=1"]
+		args += ["-Xclang", "-detailed-preprocessing-record", "-ferror-limit=1",
+"-I/usr/lib/gcc/x86_64-linux-gnu/7/include",
+"-I/usr/local/include",
+"-I/usr/lib/gcc/x86_64-linux-gnu/7/include-fixed",
+"-I/usr/include/x86_64-linux-gnu",
+"-I/usr/include" ]
 		@index = Clangc::Index.new(false, false)
 		#@translation_unit = @index.parse_translation_unit({source: source_file, args: args, flags: Clangc::TranslationUnit_Flags::DETAILED_PREPROCESSING_RECORD})
 		@translation_unit = @index.create_translation_unit(source: source_file, args: args)
@@ -125,7 +130,7 @@ class SourceParser
 	# for the standards libs can be found
 	def build_default_include_libs
 		header_paths = []
-		gcc_lib_base='/usr/lib/gcc/' << `llvm-config40 --host-target`.chomp << "/*"
+		gcc_lib_base='/usr/lib/gcc/' << `llvm-config-3.8 --host-target`.chomp << "/*"
 		last_gcc_lib_base = Dir.glob(gcc_lib_base ).sort.last
 		if last_gcc_lib_base
 			gcc_lib = last_gcc_lib_base + "/include"
@@ -173,6 +178,7 @@ def getcall(val1, val2)
 		"-P4P" => 11,
 		"-L4PL" => 12,
 		"-LP" => 13,
+		"-LPLPP" => 14,
 		}
 
 	key = ""
