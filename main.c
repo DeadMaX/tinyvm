@@ -28,21 +28,20 @@ static void *syms[MAXSYMS];
 static enum
 {
     /* return_param1_param2_param3_param4 */
-	VOID_VOID = 0,
-	VOID_INT,
+	VOID_INT = 0,
 	INT_POINTER,
-	INT_POINTER_INT,
-	INT_POINTER_INT_INT,
 	INT_VOID,
-	VOID_POINTER_INT_INT,
 	POINTER_POINTER,
-	INT_POINTER_POINTER_POINTER,
 	INT_INT_POINTER_INT,
 	INT_INT_INT,
 	INT_INT,
 	INT_POINTER_POINTER_POINTER_POINTER_POINTER,
-	INT_POINTER_POINTER_POINTER_POINTER,
+	POINTER_POINTER_POINTER,
+	INT_INT_POINTER,
+	INT_INT_INT_POINTER,
+	POINTER_INT_POINTER,
 	LONG_INT_POINTER_LONG,
+	LONG_POINTER,
 
 	SYMS_TYPE_MAX
 } syms_type[MAXSYMS];
@@ -214,34 +213,17 @@ static void call(cpustate *state)
 	}
 	switch(syms_type[func])
 	{
-		case VOID_VOID:
-			((void (*)(void))syms[func])();
-			break;
 		case VOID_INT:
 			((void (*)(int))syms[func])(state->regs[0]);
 			break;
 		case INT_POINTER:
 			state->regs[0] = ((int (*)(void *))syms[func])((void *)state->regs[0]);
 			break;
-		case INT_POINTER_INT:
-			state->regs[0] = ((int (*)(void *, int))syms[func])((void *)state->regs[0], (int)state->regs[1]);
-			break;
-		case INT_POINTER_INT_INT:
-			state->regs[0] = ((int (*)(void *, int, int))syms[func])((void *)state->regs[0], (int)state->regs[1],
-							(int)state->regs[2]);
-			break;
 		case INT_VOID:
 			state->regs[0] = ((int (*)(void))syms[func])();
 			break;
-		case VOID_POINTER_INT_INT:
-			((void (*)(void *, int, int))syms[func])((void *)state->regs[0], (int)state->regs[1], (int)state->regs[2]);
-			break;
 		case POINTER_POINTER:
 			state->regs[0] = (uintptr_t)((void *(*)(void *))syms[func])((void *)state->regs[0]);
-			break;
-		case INT_POINTER_POINTER_POINTER:
-			state->regs[0] = ((int (*)(void *, void *, void *))syms[func])((void *)state->regs[0],
-							 (void *)state->regs[1], (void *)state->regs[2]);
 			break;
 		case INT_INT_POINTER_INT:
 			state->regs[0] = ((int (*)(int, void *, int))syms[func])((int)state->regs[0],
@@ -264,14 +246,28 @@ static void call(cpustate *state)
 							 (void *)state->regs[1], (void *)state->regs[2], (void *)state->regs[3],
 							(void *)vmstack[state->stackptr - 1]);
 			break;
-		case INT_POINTER_POINTER_POINTER_POINTER:
-			state->regs[0] = ((int (*)(void *, void *, void *, void *))syms[func])((void *)state->regs[0],
-							 (void *)state->regs[1], (void *)state->regs[2], (void *)state->regs[3]);
+		case POINTER_POINTER_POINTER:
+			state->regs[0] = (uintptr_t)((void *(*)(void *, void *))syms[func])((void *)state->regs[0], (void *)state->regs[1]);
+			break;
+		case INT_INT_POINTER:
+			state->regs[0] = ((int (*)(int, void *))syms[func])((int)state->regs[0], (void *)state->regs[1]);
+			break;
+		case INT_INT_INT_POINTER:
+			state->regs[0] = ((int (*)(int, int, void *))syms[func])((int)state->regs[0],
+							 (int)state->regs[1], (void *)state->regs[2]);
+			break;
+		case POINTER_INT_POINTER:
+			state->regs[0] = (uintptr_t)((void *(*)(int, void *))syms[func])((int)state->regs[0],
+								(void *)state->regs[1]);
 			break;
 		case LONG_INT_POINTER_LONG:
-			state->regs[0] = ((uint64_t (*)(int, void *, uint64_t))syms[func])((int)state->regs[0],
-							 (void *)state->regs[1], (uint64_t)state->regs[2]);
+			state->regs[0] = ((u_long (*)(int, void *, u_long))syms[func])((int)state->regs[0],
+							 (void *)state->regs[1], (u_long)state->regs[2]);
 			break;
+		case LONG_POINTER:
+			state->regs[0] = ((u_long (*)(void *))syms[func])((void *)state->regs[0]);
+			break;
+
 		default:
 			fprintf(stderr, "Bad call\n");
 			exit(0);
@@ -449,7 +445,7 @@ static void jump(cpustate *state)
 	{
 		if (!(((param & 0x40) && state->greater)
 			 || ((param & 0x20) && state->lesser)
-			 || ((param & 0x20) && state->lesser)))
+			 || ((param & 0x10) && state->equals)))
 		{
 			return;
 		}
