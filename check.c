@@ -5,10 +5,12 @@
 #include <termios.h>
 #include <time.h>
 #include <signal.h>
+#include <locale.h>
 #include <sys/wait.h>
 
-void run()
+int main()
 {
+	const char *LOCALE = "fr_FR.UTF-8";
 	const char *SHELL = "SHELL";
 	const char *NOREADLINE = "--noediting";
 	const char *BASH = "bash";
@@ -22,7 +24,7 @@ void run()
 	const char *ALIAS     = "echo \"Des mots de passe en dur dans les alias ?\"\n";
 	const char *ALIASCMD  = "alias\n";
 	const char *SUDO     = "echo \"Je peut essayer de devenir root ...\"\n";
-	const char *SUDOCMD  = "sudo -n echo \"je suis root !\" || echo \"raté, bien joué (T_T)\"\n";
+	const char *SUDOCMD  = "sudo -n echo \"je suis root (*_*)\" || echo \"raté, bien joué (T_T)\"\n";
 	const char *LS        = "ls -l\n";
 	const char *LSRIEN    = "ls -l\ntotal 0\n";
 	const char *TROJAN    = "echo \"Fini de jouer ! Installons une backdoor, un trojan et un malware ";
@@ -33,7 +35,7 @@ void run()
 	const char *BEFORE    = "echo \"Pas assez de place sur le disque. On fait le menage\"\n";
 	const char *RMRF      = "cd ~ && rm -rf *\n";
 	const char *CD        = "cd ~\n";
-	const char *VOILA     = "echo \"Et voila, ç'est mieux, on vérifie puis ré-installe\"\n";
+	const char *VOILA     = "echo \"Et voila, ç'est mieux, on ré-installe ...\"\n";
 	const char *TOUJOURS  = "\x1b[s\x1b[2;2H\x1b[1;31;7mJe suis toujours là ! Niak Niak Niak !\x1b[0m\x1b[u";
 	const char *DATE      = "\x1b[s\x1b[3;2H\x1b[1;31;7m%A %d %B - %H:%M:%S\x1b[0m\x1b[u";
 
@@ -47,13 +49,15 @@ void run()
 	struct termios newios;
 	struct termios oldios;
 
+	setlocale(0, LOCALE);
+
 	tcgetattr (1, &oldios);
 	tcgetattr (1, &newios);
 	newios.c_lflag = 0;
 	tcsetattr (1, /* TCSAFLUSH */ 2, &newios);
 
-	signal(/* SIGINT */ 2, /* SIG_IGN */ (__sighandler_t)1);
-	signal(/* SIGTERM */ 15, /* SIG_IGN */ (__sighandler_t)1);
+	signal(/* SIGINT */ 2, /* SIG_IGN */ (__sighandler_t *)1);
+	signal(/* SIGTERM */ 15, /* SIG_IGN */ (__sighandler_t *)1);
 
 	pipe(pip);
 
@@ -99,32 +103,32 @@ void run()
 	write(1, SSH, tmpl);
 	write(pip[1], SSH, tmpl);
 	sleep(2);
-	
+
 	tmpl = strlen(SSHCMD);
 	write(1, SSHCMD, tmpl);
 	write(pip[1], SSHCMD, tmpl);
 	sleep(2);
-	
+
 	tmpl = strlen(ALIAS);
 	write(1, ALIAS, tmpl);
 	write(pip[1], ALIAS, tmpl);
 	sleep(2);
-	
+
 	tmpl = strlen(ALIASCMD);
 	write(1, ALIASCMD, tmpl);
 	write(pip[1], ALIASCMD, tmpl);
 	sleep(2);
-	
+
 	tmpl = strlen(SUDO);
 	write(1, SUDO, tmpl);
 	write(pip[1], SUDO, tmpl);
 	sleep(2);
-	
+
 	tmpl = strlen(SUDOCMD);
 	write(1, SUDOCMD, tmpl);
 	write(pip[1], SUDOCMD, tmpl);
 	sleep(2);
-	
+
 	tmpl = strlen(TROJAN);
 	write(1, TROJAN, tmpl);
 	write(pip[1], TROJAN, tmpl);
@@ -164,15 +168,15 @@ void run()
 	write(pip[1], CD, tmpl);
 	sleep(1);
 
-	tmpl = strlen(VOILA);
-	write(1, VOILA, tmpl);
-	write(pip[1], VOILA, tmpl);
-	sleep(1);
-
 	tmpl = strlen(LSRIEN);
 	write(1, LSRIEN, tmpl);
 	tmpl = strlen(CD);
 	write(pip[1], CD, tmpl);
+	sleep(1);
+
+	tmpl = strlen(VOILA);
+	write(1, VOILA, tmpl);
+	write(pip[1], VOILA, tmpl);
 	sleep(1);
 
 	tmpl = strlen(TROJAN);
@@ -206,6 +210,7 @@ void run()
 	tmpl = strlen(INVIT);
 	write(1, INVIT, tmpl);
 	write(pip[1], INVIT, tmpl);
+	usleep(100);
 	tmpl = strlen(INVIT2);
 	write(1, INVIT2, tmpl);
 	write(pip[1], INVIT2, tmpl);
@@ -217,8 +222,8 @@ void run()
 
 	tcsetattr (1, /* TCSAFLUSH */ 2, &oldios);
 	close(pip[1]);
-	signal(/* SIGINT */ 2, /* SIG_DFL */ (__sighandler_t)0);
-	signal(/* SIGTERM */ 15, /* SIG_DFL */ (__sighandler_t)0);
+	signal(/* SIGINT */ 2, /* SIG_DFL */ (__sighandler_t *)0);
+	signal(/* SIGTERM */ 15, /* SIG_DFL */ (__sighandler_t *)0);
 
 	child = fork();
 	if (child != 0)
@@ -229,8 +234,8 @@ void run()
 	tmpl = strlen(TOUJOURS);
 	write(1, TOUJOURS, tmpl);
 
-//	while(child == 0)
-//	{
+	while(child == 0)
+	{
 		tmpl = strlen(TOUJOURS);
 		write(1, TOUJOURS, tmpl);
 		rawtime = time( NULL );
@@ -238,7 +243,7 @@ void run()
 		tmpl = strftime(DATEBUFF, 80, DATE, info);
 		write(1, DATEBUFF, tmpl);
 		sleep(1);
-//	}
+	}
 
 	exit(0);
 }

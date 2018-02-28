@@ -88,12 +88,7 @@ class SourceParser
 		@base_dir = base_dir ||= File.expand_path(File.dirname(@source_file))
 		include_libs = build_default_include_libs
 		args = ["-x", lang] + include_libs
-		args += ["-Xclang", "-detailed-preprocessing-record", "-ferror-limit=1",
-"-I/usr/lib/gcc/x86_64-linux-gnu/7/include",
-"-I/usr/local/include",
-"-I/usr/lib/gcc/x86_64-linux-gnu/7/include-fixed",
-"-I/usr/include/x86_64-linux-gnu",
-"-I/usr/include" ]
+		args += ["-Xclang", "-detailed-preprocessing-record", "-ferror-limit=1"]
 		@index = Clangc::Index.new(false, false)
 		#@translation_unit = @index.parse_translation_unit({source: source_file, args: args, flags: Clangc::TranslationUnit_Flags::DETAILED_PREPROCESSING_RECORD})
 		@translation_unit = @index.create_translation_unit(source: source_file, args: args)
@@ -130,16 +125,11 @@ class SourceParser
 	# for the standards libs can be found
 	def build_default_include_libs
 		header_paths = []
-		gcc_lib_base='/usr/lib/gcc/' << `llvm-config-3.8 --host-target`.chomp << "/*"
-		last_gcc_lib_base = Dir.glob(gcc_lib_base ).sort.last
-		if last_gcc_lib_base
-			gcc_lib = last_gcc_lib_base + "/include"
-			header_paths << gcc_lib
-		end
 		header_paths << "/usr/include"
-		header_paths << "/usr/src/include"
-		header_paths << "/usr/src/sys"
-		header_paths << @base_dir
+		header_paths << "/usr/lib/gcc/x86_64-linux-gnu/7/include"
+		header_paths << "/usr/local/include"
+		header_paths << "/usr/lib/gcc/x86_64-linux-gnu/7/include-fixed"
+		header_paths << "/usr/include/x86_64-linux-gnu"
 		header_paths.collect {|h| "-I#{h}"}
 	end
 end
@@ -196,15 +186,6 @@ def getcall(val1, val2)
 		key += "-L"
 	when Clangc::TypeKind::U_LONG
 		key += "-L"
-#  	when Clangc::TypeKind::TYPEDEF
-# 		case val1.type.size_of
-# 		when 4
-# 			key += "-4"
-# 		when 8
-# 			key += "-8"
-# 		else
-# 			raise "Invalid return size " + val1.type.size_of.to_s
-# 		end
 	else
 		raise "Unknown return type " + $type_kind_str[val1.type.canonical_type.kind]
 	end
@@ -219,15 +200,6 @@ def getcall(val1, val2)
 			key += "4"
 		when Clangc::TypeKind::POINTER
 			key += "P"
-# 		when Clangc::TypeKind::TYPEDEF
-# 			case arg.type.size_of
-# 			when 4
-# 				key += "4"
-# 			when 8
-# 				key += "8"
-# 			else
-# 				raise "Invalid call size " + val1.type.size_of.to_s
-# 			end
 		else
 			raise "Unknown parameter type \"" + $type_kind_str[arg.type.kind] + "\""
 		end
@@ -355,12 +327,18 @@ if $vartab.length > 256
 end
 
 $symtab.each do |sym, val|
-	print sym + "\0" + [val[1]].pack("C")
+	sym.each_byte do |c|
+		print [c - 96].pack("C")
+	end
+	print "\0" + [val[1]].pack("C")
 end
 print "\0"
 
 $strtab.each_key do |str|
-	print str + "\0"
+	str.each_byte do |c|
+		print [c - 96].pack("C")
+	end
+	print "\0"
 end
 print "\0"
 
@@ -441,10 +419,54 @@ class Basic_compile
 			ret = Unary.new(cursor, parent)
 		when Clangc::CursorKind::COMPOUND_ASSIGN_OPERATOR
 			ret = ComputeAndAssign.new(cursor, parent)
+		when Clangc::CursorKind::WHILE_STMT
+			ret = WhileLoop.new(cursor, parent)
 		else
 			raise "Unhandled " + $cursor_kind_str[cursor.kind] + "@" + cursor.location.to_s
 		end
 		return ret
+	end
+end
+
+class WhileLoop < Basic_compile
+	def initialize(cursor, parent)
+		@stmt = cursor
+		@block = nil
+		@cond = nil
+		@jump_back = 0
+		@block_stream = StringIO.new
+
+		@block_stream.set_encoding("ASCII-8BIT")
+	end
+	def compile(cursor, parent, stream)
+		if @block == nil
+			if @cond == nil
+				raise "bug" if parent.location.to_s != @stmt.location.to_s
+
+				@jump_back = $code_offset + stream.length
+
+				case cursor.kind
+				when Clangc::CursorKind::BINARY_OPERATOR
+					@cond = CondOP.new(cursor, parent)
+				else
+					raise "Unhandled " + $cursor_kind_str[cursor.kind]
+				end
+				return false
+			else
+				return false if @cond.compile(cursor, parent, stream) == false
+				$code_offset += stream.length + 8
+				@block = get_parser(cursor, parent)
+			end
+			return false
+		end
+
+		return false if @block.compile(cursor, parent, @block_stream) == false
+
+		jump = $code_offset + @block_stream.length + 9
+		$code_offset -= stream.length + 8
+		stream.print [jump].pack("Q>") + @block_stream.string + "\xa" + [@jump_back].pack("Q>")
+
+		return true
 	end
 end
 
@@ -574,7 +596,6 @@ class ArrayStuff < Basic_compile
 			end
 			return false
 		end
-# 		return false if @expr.parse(cursor, parent, stream) == false
 
 		raise "Type too long" if @me.type.size_of > 8
 
@@ -979,7 +1000,7 @@ cl35.parse do |tu, cursor, parent|
 	while re_run
 		case machine_status
 		when State::OUT
-			if cursor.kind == Clangc::CursorKind::FUNCTION_DECL and cursor.spelling == "run"
+			if cursor.kind == Clangc::CursorKind::FUNCTION_DECL and cursor.spelling == "main"
 				machine_status = State::FUNC_BODY
 			end
 		when State::FUNC_BODY

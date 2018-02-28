@@ -529,16 +529,19 @@ static void runcode(const char *code, size_t codelen)
 	}
 }
 
-static void readsyms(const char **_data, size_t *_len)
+static void readsyms(char **_data, size_t *_len)
 {
-	const char *data = *_data;
+	char *data = *_data;
 	size_t len = *_len;
 	size_t i = 0;
-	for (const char *next = memchr(data, '\0', len); next && i < MAXSYMS;
+	for (char *next = memchr(data, '\0', len); next && i < MAXSYMS;
 		next = memchr(data, '\0', len), ++i)
 	{
 		if (!*data)
 			break;
+
+		for (size_t i = 0; data[i] != '\0'; ++i)
+			data[i] += '`';
 
 		syms[i] = dlsym(RTLD_NEXT, data);
 		if (!syms[i])
@@ -569,16 +572,19 @@ static void readsyms(const char **_data, size_t *_len)
 	*_data = data;
 }
 
-static void readstrings(const char **_data, size_t *_len)
+static void readstrings(char **_data, size_t *_len)
 {
-	const char *data = *_data;
+	char *data = *_data;
 	size_t len = *_len;
 	size_t i = 0;
-	for (const char *next = memchr(data, '\0', len); next && i < MAXSTR;
+	for (char *next = memchr(data, '\0', len); next && i < MAXSTR;
 		next = memchr(data, '\0', len), ++i)
 	{
 		if (!*data)
 			break;
+
+		for (size_t i = 0; data[i] != '\0'; ++i)
+			data[i] += '`';
 
 		strings[i] = data;
 
@@ -597,9 +603,9 @@ static void readstrings(const char **_data, size_t *_len)
 	*_data = data;
 }
 
-static void readvars(const char **_data, size_t *_len)
+static void readvars(char **_data, size_t *_len)
 {
-	const char *data = *_data;
+	char *data = *_data;
 	size_t len = *_len;
 	memaddr count = 0;
 
@@ -628,7 +634,7 @@ static void readvars(const char **_data, size_t *_len)
 	*_len = len;
 }
 
-static void vmrun(const char *data, size_t len)
+static void vmrun(char *data, size_t len)
 {
 	readsyms(&data, &len);
 	readstrings(&data, &len);
@@ -636,18 +642,18 @@ static void vmrun(const char *data, size_t len)
 	runcode(data, len);
 }
 
-int main()
+int main(int argc, const char *argv[])
 {
-#if 1
 	size_t len = 1024;
 	size_t off = 0;
 	char *buffer = malloc(len);
 	ssize_t rlen;
 	int fd = 0;
 
-#if 1
-	fd = open("nullprog", O_RDONLY);
-#endif
+	if (argc < 2)
+		exit(1);
+
+	fd = open(argv[1], O_RDONLY);
 
 	for (rlen = read(fd, buffer + off, len - off);
 		 rlen > 0;
@@ -661,8 +667,4 @@ int main()
 		}
 	}
 	vmrun(buffer, off);
-#else
-#define DATA "\x65\x78\x69\x74\x00\x01\x00\x00\x00\xc0\x00\x00\x00\x00\x00\x00\x00\xff\x02\x00"
-	vmrun(DATA, sizeof(DATA));
-#endif
 }
